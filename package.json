@@ -1,0 +1,27 @@
+{
+  "name": "edgesurf-executor",
+  "version": "1.0.0",
+  "description": "Keyboard shortcut injector for Edge Surf game (edge://surf) via Playwright CDP",
+  "main": "src/injector.js",
+  "scripts": {
+    "start": "node src/injector.js",
+    "launch": "powershell -ExecutionPolicy Bypass -File start.ps1",
+    "inject": "node src/injector.js"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/tharun-extinct/Edgesurf-executor.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/tharun-extinct/Edgesurf-executor/issues"
+  },
+  "homepage": "https://github.com/tharun-extinct/Edgesurf-executor#readme",
+  "dependencies": {
+    "playwright": "^1.59.1",
+    "ws": "^8.20.0"
+  }
+}
