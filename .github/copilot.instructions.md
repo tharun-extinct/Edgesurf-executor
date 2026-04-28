@@ -1,7 +1,7 @@
 ---
 applyTo: "**/*"
 name: edgesurf-executor
-description: Keyboard shortcut injector for Edge Surf (edge://surf) via CDP — auto-injects JS into the chrome-untrusted://surf/ iframe
+description: Keyboard shortcut injector for Edge Surf (edge://surf) via raw CDP WebSocket — injects JS into the chrome-untrusted://surf/ iframe. Requires --remote-debugging-port.
 ---
 
 

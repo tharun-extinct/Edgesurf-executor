@@ -1,7 +1,7 @@
 {
   "name": "edgesurf-executor",
   "version": "1.0.0",
-  "description": "Keyboard shortcut injector for Edge Surf game (edge://surf) via Playwright CDP",
+  "description": "Keyboard shortcut injector for Edge Surf game (edge://surf) via CDP",
   "main": "src/injector.js",
   "scripts": {
     "start": "node src/injector.js",
