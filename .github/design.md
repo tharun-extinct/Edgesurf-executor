@@ -2,7 +2,30 @@
 
 ## System Overview
 
-EdgeSurf Executor injects keyboard shortcuts into the Edge Surf game (`edge://surf`) via Chrome DevTools Protocol (CDP). It auto-injects a JS snippet that listens for keybinds and programmatically clicks DOM buttons in the game UI.
+EdgeSurf Executor injects keyboard shortcuts into the Edge Surf game (`edge://surf`) by injecting a JS snippet into the `chrome-untrusted://surf/` iframe.
+
+**Two injection methods are available:**
+
+### Method 1: Edge Extension (Primary — No Debug Mode Required)
+
+```
+┌────────────────────────┐         ┌─────────────────────────────┐
+│  Edge Extension (MV3)  │         │  Microsoft Edge (normal)    │
+│  background.js         │         │                             │
+│                        │         │  ┌────────────────────────┐ │
+│  chrome.debugger API   │────────►│  │ edge://surf            │ │
+│  (attach to tab)       │         │  │  ┌──────────────────┐  │ │
+│                        │  CDP    │  │  │ iframe:          │  │ │
+│  Target.attachToTarget │────────►│  │  │ chrome-untrusted │  │ │
+│  Runtime.evaluate      │         │  │  │ ://surf/         │  │ │
+│                        │         │  │  │                  │  │ │
+│                        │         │  │  │  snippet ✓       │  │ │
+└────────────────────────┘         │  │  └──────────────────┘  │ │
+                                   │  └────────────────────────┘ │
+                                   └─────────────────────────────┘
+```
+
+### Method 2: Node.js CDP Injector (Fallback — Requires Debug Mode)
 
 ```
 ┌────────────────┐     CDP / WebSocket       ┌─────────────────────────────┐
@@ -16,7 +39,7 @@ EdgeSurf Executor injects keyboard shortcuts into the Edge Surf game (`edge://su
 │  (Node.js)     │   injects snippet.js      │  │  │ chrome-untrusted │  │ │
 └────────────────┘                           │  │  │ ://surf/         │  │ │
                                              │  │  │                  │  │ │
-                                             │  │  │  snippet.js      │  │ │
+                                             │  │  │  snippet.js ✓   │  │ │
                                              │  │  └──────────────────┘  │ │
                                              │  └────────────────────────┘ │
                                              └─────────────────────────────┘
@@ -26,24 +49,25 @@ EdgeSurf Executor injects keyboard shortcuts into the Edge Surf game (`edge://su
 
 | Component | Technology | Rationale |
 |---|---|---|
-| Runtime | Node.js | Lightweight, CDP-native ecosystem |
-| CDP Transport | `ws` (WebSocket) | Minimal dependency (~200KB vs Playwright's ~50MB) |
+| **Extension** | MV3 + `chrome.debugger` API | No debug mode needed, auto-injects on tab load |
+| Fallback Runtime | Node.js + `ws` | CDP injector for when extension isn't installed |
 | Launcher | PowerShell | Native on Windows, no extra install |
 | Injected Code | Vanilla JS | Runs in browser context, no bundler needed |
 
-### Why CDP (Not Extensions)
+### Why `chrome.debugger` API
 
-Chromium **blocks all extensions and userscripts** from injecting into `edge://` and `chrome://` pages. The game also runs inside a `chrome-untrusted://surf/` iframe, adding another layer of isolation.
+Chromium blocks **content scripts** from injecting into `edge://` pages, but the `chrome.debugger` extension API can **attach to any tab** (including `edge://`) and send CDP commands like `Runtime.evaluate`. This is the same protocol used by DevTools.
 
 | Approach | Verdict |
 |---|---|
-| Extension (MV3) | ❌ Blocked on `edge://` pages |
+| Extension content scripts | ❌ Blocked on `edge://` pages |
+| **Extension + `chrome.debugger`** | **✅ Attaches to any tab, sends CDP commands — no debug flag** |
 | Tampermonkey | ❌ Blocked (extension limitation) |
 | Bookmarklet | ❌ `javascript:` blocked on `edge://` |
 | Console snippet | ✅ Works, but manual — no persistence |
 | Playwright | ❌ Page model can't access `chrome-untrusted://` iframe |
+| Raw CDP (Node.js) | ✅ Works, but requires `--remote-debugging-port` |
 | AutoHotkey | ❌ Blind input, no DOM access |
-| **Raw CDP** | **✅ Direct WebSocket to iframe target** |
 
 ## Architecture
 
@@ -51,20 +75,34 @@ Chromium **blocks all extensions and userscripts** from injecting into `edge://`
 
 ```
 EdgeSurf-Executor/
-├── src/
-│   ├── snippet.js      # Injected JS — keyboard shortcuts + cursor mgmt
-│   └── injector.js      # CDP connector — finds iframe target, injects snippet
-├── start.ps1            # Launcher — starts Edge with CDP + runs injector
+├── extension/                # ← PRIMARY: Edge extension (no debug mode)
+│   ├── manifest.json         # MV3 manifest with debugger permission
+│   ├── background.js         # Service worker — auto-injects via chrome.debugger
+│   └── icons/                # Extension icons
+├── src/                      # ← FALLBACK: Node.js CDP injector
+│   ├── snippet.js            # Injected JS — keyboard shortcuts + cursor mgmt
+│   └── injector.js           # Raw CDP connector (requires --remote-debugging-port)
+├── start.ps1                 # Launcher for fallback method
 ├── package.json
 ├── .github/
-│   ├── design.md        # This file
+│   ├── design.md             # This file
 │   └── copilot.instructions.md
 └── README.md
 ```
 
-### Data Flow
+### Data Flow — Extension (Primary)
 
-1. `start.ps1` launches Edge with `--remote-debugging-port=9222` (or detects an existing CDP session)
+1. Extension installs and background service worker starts
+2. `chrome.tabs.onUpdated` detects navigation to `edge://surf`
+3. `chrome.debugger.attach()` attaches to the tab (shows info banner)
+4. `Target.setDiscoverTargets` + `Target.getTargets` finds the `chrome-untrusted://surf/` iframe
+5. `Target.attachToTarget` opens a CDP session to the iframe
+6. `Runtime.evaluate` injects the snippet into the iframe context
+7. On tab close/navigation away, debugger detaches automatically
+
+### Data Flow — Node.js CDP (Fallback)
+
+1. `start.ps1` launches Edge with `--remote-debugging-port=9222`
 2. `injector.js` fetches `http://127.0.0.1:9222/json` to list CDP targets
 3. Filters for `chrome-untrusted://surf/` iframe targets
 4. Opens WebSocket, sends `Runtime.evaluate` with `snippet.js` source
@@ -104,10 +142,23 @@ Runs inside the `chrome-untrusted://surf/` iframe context.
 - **Active gameplay:** `#game-tint` opacity ≈ 0 AND `#action-button` not visible
 - **Menu / Paused / Game Over:** `#game-tint` opacity > 0.1 OR `#action-button` visible
 
-### 2. `src/injector.js` — CDP Connector
+### 2. `extension/background.js` — Extension Service Worker (Primary)
 
-**Why raw CDP over Playwright?**
-Playwright's `connectOverCDP()` exposes pages but cannot access `chrome-untrusted://` iframe targets via its page model. Raw CDP lets us target any debuggable frame directly by its `webSocketDebuggerUrl`.
+Uses the `chrome.debugger` API — the **same CDP protocol** as the Node.js injector, but runs **inside the browser** without needing `--remote-debugging-port`.
+
+**Key mechanisms:**
+- `chrome.debugger.attach(tabId, "1.3")` — attaches to any tab including `edge://surf`
+- `Target.getTargets` — discovers the `chrome-untrusted://surf/` iframe inside the tab
+- `Target.attachToTarget` — opens a flattened CDP session to the iframe
+- `Runtime.evaluate` via the session — injects the snippet directly into iframe context
+- `chrome.tabs.onUpdated` — auto-detects when user opens `edge://surf`
+- `chrome.action.onClicked` — manual re-inject or open `edge://surf` on icon click
+
+**Trade-off:** Edge shows an info banner *"EdgeSurf Executor started debugging this browser"* which the user can dismiss. This is purely cosmetic.
+
+### 3. `src/injector.js` — Raw CDP Connector (Fallback)
+
+For users who prefer not to install an extension. Requires Edge launched with `--remote-debugging-port`.
 
 **Injection flow:**
 1. `GET /json` → list all targets
@@ -117,7 +168,7 @@ Playwright's `connectOverCDP()` exposes pages but cannot access `chrome-untruste
 5. Close WebSocket, mark target as injected
 6. Repeat every 2s (poll for new tabs / page reloads)
 
-### 3. `start.ps1` — Launcher
+### 4. `start.ps1` — Launcher (for fallback method)
 
 1. Checks if CDP port is already listening
 2. If not, launches Edge with `--remote-debugging-port` and separate `--user-data-dir`
@@ -147,8 +198,8 @@ Switched from Playwright to raw `ws` library. Reduces `node_modules` from ~50MB 
 
 ## Constraints & Limitations
 
-- **Edge must be launched with `--remote-debugging-port`** — cannot attach to a normal instance
-- **Separate user-data-dir required** if Edge is already running without the debug flag
+- **Extension method:** Shows "debugging" info banner (cosmetic only, can be dismissed)
+- **Fallback method:** Edge must be launched with `--remote-debugging-port`
 - **DOM selectors may break** if Microsoft updates the surf game UI — inspect and re-discover
 - **Canvas interactions** (during active gameplay) not supported — only DOM overlay buttons
 - **Single-machine only** — CDP binds to localhost
@@ -159,3 +210,4 @@ Switched from Playwright to raw `ws` library. Reduces `node_modules` from ~50MB 
 - CDP event-driven injection (`Target.targetCreated`) instead of polling
 - Auto-discovery script for DOM selectors
 - Cross-platform launcher (bash script for macOS/Linux)
+- Suppress or auto-dismiss the debugger info banner
