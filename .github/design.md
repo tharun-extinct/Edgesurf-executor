@@ -67,13 +67,14 @@ EdgeSurf-Executor/
 
 ### Data Flow
 
-1. `start.bat` / `start.ps1` launches Edge with `--remote-debugging-port=9222` and opens `edge://surf`
-2. If Edge is already running, a separate user profile is used to enable the debug port
-3. `injector.js` fetches `http://127.0.0.1:9222/json` to list CDP targets
-4. Finds `chrome-untrusted://surf/` iframe target
-5. Opens WebSocket to `target.webSocketDebuggerUrl`
-6. Sends `Runtime.evaluate` with `snippet.js` source
-7. Polls every 2s for new/reloaded surf tabs and re-injects
+1. `start.bat` / `start.ps1` launches Edge in debug mode using the user's own profile (`--user-data-dir`)
+2. Homepage/startup pages are suppressed (`--no-startup-window`, `--homepage=about:blank`)
+3. A second Edge call opens **only** `edge://surf` as the single tab
+4. `injector.js` fetches `http://127.0.0.1:9222/json` to list CDP targets
+5. Finds `chrome-untrusted://surf/` iframe target
+6. Opens WebSocket to `target.webSocketDebuggerUrl`
+7. Sends `Runtime.evaluate` with `snippet.js` source
+8. Polls every 2s for new/reloaded surf tabs and re-injects
 
 ## Core Modules
 
@@ -123,10 +124,17 @@ Connects to Edge's debug port and injects the snippet into the surf iframe.
 
 ### 3. `start.ps1` / `start.bat` — Launchers
 
-1. Checks if CDP port is already listening
-2. If not, launches Edge with `--remote-debugging-port` and separate `--user-data-dir` (if Edge is already running)
-3. Ensures `edge://surf` tab is open
+1. Checks if CDP port is already listening (skips launch if Edge is already in debug mode)
+2. If not, launches Edge with the following flags:
+   - `--remote-debugging-port=9222` — enables CDP
+   - `--user-data-dir=<user-profile>` — uses the user's real Edge profile
+   - `--no-startup-window` — prevents homepage/startup tabs from loading
+   - `--no-first-run --no-default-browser-check` — skips prompts
+   - `--homepage=about:blank --restore-last-session=false` — suppresses default pages
+3. Opens `edge://surf` as the **only** tab via a second Edge call
 4. Runs `node src/injector.js`
+
+> **Constraint:** Edge must NOT already be running with this profile. The `--remote-debugging-port` flag is ignored if an Edge instance with the same profile is already active.
 
 ## Design Decisions
 
@@ -151,8 +159,8 @@ Switched from Playwright to raw `ws` library. Reduces `node_modules` from ~50MB 
 
 ## Constraints & Limitations
 
-- **Edge must be launched with `--remote-debugging-port`** — the launcher handles this automatically
-- **Separate user-data-dir** is used if Edge is already running without the debug flag
+- **Edge must NOT be already running** with the same profile — close Edge first, then run the launcher
+- **`--remote-debugging-port` is per-process** — if Edge is already open, the flag is silently ignored
 - **DOM selectors may break** if Microsoft updates the surf game UI — inspect and re-discover
 - **Canvas interactions** (during active gameplay) not supported — only DOM overlay buttons
 - **Single-machine only** — CDP binds to localhost
